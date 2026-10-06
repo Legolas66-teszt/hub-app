@@ -33,6 +33,7 @@ final class Hub {
     private static final String K_TS = "ts";         /* http://100.x.y.z – a hub mondja meg (/api/ping) */
     private static final String K_ID = "id";         /* a hub azonosítója (Wi-Fi MAC) – más hálózat azonos IP-jű eszköze ellen */
     private static final String K_WE = "we_started"; /* a Tailscale-t ez az app kapcsolta be */
+    private static final String K_OWN = "own_ts";    /* a Tailscale csak a hubhoz kell: az app akkor is kikapcsolja, ha kézzel kapcsolták be */
 
     static final class Ping {
         String id, ip, ts;
@@ -47,6 +48,10 @@ final class Hub {
     static String local(Context c) { return prefs(c).getString(K_LOCAL, ""); }
     static String ts(Context c) { return prefs(c).getString(K_TS, ""); }
     static boolean weStarted(Context c) { return prefs(c).getBoolean(K_WE, false); }
+    static boolean ownTs(Context c) { return prefs(c).getBoolean(K_OWN, true); }
+    static void setOwnTs(Context c, boolean v) { prefs(c).edit().putBoolean(K_OWN, v).apply(); }
+    /** Ki kell-e kapcsolnia az appnak a Tailscale-t (otthon / a használat után). */
+    static boolean offIsOurs(Context c) { return weStarted(c) || ownTs(c); }
 
     /** "192.168.0.115", "http://zigbee-hub.local/" → "http://192.168.0.115", "http://zigbee-hub.local"; üres, ha üres. */
     static String normalize(String s) {
@@ -192,11 +197,18 @@ final class Hub {
         tsSend(c, "com.tailscale.ipn.CONNECT_VPN");
     }
 
+    /** A felhasználó a mi kérésünkre kapcsolta be (a Tailscale appban): a háttérbe kerülés után mi kapcsoljuk ki. */
+    static void markOurs(Context c) {
+        prefs(c).edit().putBoolean(K_WE, true).apply();
+    }
+
     /** Tailscale ki – csak ha ez az app kapcsolta be. */
     static void tsOffIfOurs(Context c) {
-        if (weStarted(c)) {
+        if (offIsOurs(c)) {
             prefs(c).edit().putBoolean(K_WE, false).apply();
-            tsSend(c, "com.tailscale.ipn.DISCONNECT_VPN");
+            if (vpnUp(c)) {
+                tsSend(c, "com.tailscale.ipn.DISCONNECT_VPN");
+            }
         }
     }
 }

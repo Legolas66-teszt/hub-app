@@ -47,8 +47,9 @@ import java.util.concurrent.Executors;
 public class MainActivity extends Activity {
     private static final int RC_FILE = 1, RC_SAVE = 2;
     private static final int LOCAL_TIMEOUT_MS = 1200;
-    private static final int TS_TIMEOUT_MS = 2500;
-    private static final int TS_WAIT_S = 30;
+    private static final int TS_TIMEOUT_MS = 4000;
+    private static final int TS_UP_S = 10;      /* ennyi idő alatt kell a Tailscale-nek bekapcsolnia a kérésre */
+    private static final int TS_WAIT_S = 45;    /* utána ennyi ideig várunk, hogy a hub válaszoljon rajta */
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final ExecutorService bg = Executors.newSingleThreadExecutor();
@@ -57,11 +58,12 @@ public class MainActivity extends Activity {
     private View cover;
     private TextView msg;
     private ProgressBar spin;
-    private Button retry;
+    private Button retry, tsOpen;
 
     private String base;            /* a WebView-ban most megnyitott cím, null = semmi */
     private volatile boolean remote;
     private volatile int gen;       /* a futó próba sorszáma: az újabb próba a régit érvényteleníti */
+    private volatile boolean busy;  /* fut egy próba – a hálózatváltás ilyenkor nem indít újat (a VPN be- / kikapcsolása is az) */
     private boolean started;
 
     private ValueCallback<Uri[]> fileCb;
@@ -69,6 +71,9 @@ public class MainActivity extends Activity {
 
     private ConnectivityManager.NetworkCallback netCb;
     private final Runnable reprobe = () -> probe();
+    /* háttérben 2 perc múlva Tailscale ki – pontosan, amíg a folyamat él; az OffReceiver ébresztője a tartalék
+     * (az alvó telefonon az Android azt később is futtathatja) */
+    private final Runnable offTimer = () -> bg.execute(() -> Hub.tsOffIfOurs(this));
 
     // ------------------------------------------------------------------ felület
 
@@ -163,6 +168,11 @@ public class MainActivity extends Activity {
         });
         Button set = button("Címek", false);
         set.setOnClickListener(v -> settings());
+        tsOpen = button("Tailscale megnyitása", true);
+        tsOpen.setOnClickListener(v -> openTailscale());
+        LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        tp.topMargin = dp(24);
+        c.addView(tsOpen, tp);
         row.addView(retry);
         LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         bp.leftMargin = dp(12);
@@ -190,12 +200,29 @@ public class MainActivity extends Activity {
         return b;
     }
 
-    /** A takaró szövege; busy: forgó jel, különben az Újra / Címek gombok. */
-    private void status(String text, boolean busy) {
+    /** A takaró szövege; spinning: forgó jel, különben az Újra / Címek gombok (withTs: + „Tailscale megnyitása”). */
+    private void status(String text, boolean spinning) {
+        status(text, spinning, false);
+    }
+
+    private void status(String text, boolean spinning, boolean withTs) {
         cover.setVisibility(View.VISIBLE);
         msg.setText(text);
-        spin.setVisibility(busy ? View.VISIBLE : View.GONE);
-        ((View) retry.getParent()).setVisibility(busy ? View.GONE : View.VISIBLE);
+        spin.setVisibility(spinning ? View.VISIBLE : View.GONE);
+        ((View) retry.getParent()).setVisibility(spinning ? View.GONE : View.VISIBLE);
+        tsOpen.setVisibility(!spinning && withTs ? View.VISIBLE : View.GONE);
+    }
+
+    /** A Tailscale app megnyitása (ha a kérésre nem kapcsolt be): ott egy koppintás, utána vissza ide. Mivel mi kértük,
+     *  a háttérbe kerülés után mi is kapcsoljuk ki. */
+    private void openTailscale() {
+        Intent i = getPackageManager().getLaunchIntentForPackage(Hub.TS_PKG);
+        if (i == null) {
+            Toast.makeText(this, "A Tailscale app nincs telepítve", Toast.LENGTH_LONG).show();
+            return;
+        }
+        Hub.markOurs(this);
+        startActivity(i);
     }
 
     private void post(int g, Runnable r) {
@@ -232,6 +259,27 @@ public class MainActivity extends Activity {
         }
         final boolean shown = base != null;
         bg.execute(() -> {
+            busy = true;
+            try {
+                find(g, local, shown);
+            } finally {
+                busy = false;
+            }
+        });
+    }
+
+    private static boolean nap(long ms) {
+        try {
+            Thread.sleep(ms);
+            return true;
+        } catch (InterruptedException e) {
+            return false;
+        }
+    }
+
+    /** A próba a háttérszálon. */
+    private void find(final int g, final String local, final boolean shown) {
+        {
             /* 1. otthon: wifin a helyi cím (kétszer, a képernyő bekapcsolása utáni lassú wifi miatt) */
             if (Hub.onWifi(this)) {
                 for (int i = 0; i < 2 && g == gen; i++) {
@@ -263,33 +311,55 @@ public class MainActivity extends Activity {
                 post(g, () -> show(ts, true));
                 return;
             }
-            if (!shown || !remote) {
-                post(g, () -> status("Tailscale bekapcsolása…", true));
+            final boolean quiet = shown && remote; /* a távoli oldal már látszik: ne takarjuk el */
+            if (!Hub.vpnUp(this)) {
+                if (!quiet) {
+                    post(g, () -> status("Tailscale bekapcsolása…", true));
+                }
+                Hub.tsOn(this, true);
+                long upEnd = System.currentTimeMillis() + TS_UP_S * 1000L;
+                while (g == gen && !Hub.vpnUp(this) && System.currentTimeMillis() < upEnd) {
+                    if (!nap(500)) {
+                        return;
+                    }
+                }
+                if (g != gen) {
+                    return;
+                }
+                if (!Hub.vpnUp(this)) {
+                    post(g, () -> status("A Tailscale nem kapcsolt be magától.\n\nNyisd meg, kapcsold be, és gyere vissza – "
+                            + "a hub magától betölt.\n\n(Ha a Tailscale értesítést küldött, koppints rá.)", false, true));
+                    return;
+                }
             }
-            Hub.tsOn(this, !Hub.vpnUp(this)); /* ha már futott (kézzel), nem a miénk – nem kapcsoljuk ki */
             long end = System.currentTimeMillis() + TS_WAIT_S * 1000L;
             while (g == gen && System.currentTimeMillis() < end) {
+                final long left = Math.max(0, (end - System.currentTimeMillis()) / 1000);
+                if (!quiet) {
+                    post(g, () -> status("Kapcsolódás a hubhoz a Tailscale-en…\n(" + left + " s)", true));
+                }
                 p = Hub.ping(ts, TS_TIMEOUT_MS);
                 if (p != null && Hub.acceptTs(this, p)) {
                     post(g, () -> show(ts, true));
                     return;
                 }
-                try {
-                    Thread.sleep(1000);
-                } catch (InterruptedException e) {
+                if (!nap(1000)) {
                     return;
                 }
             }
-            post(g, () -> status("A hub a Tailscale-en sem válaszol.\n\nNézd meg, hogy a Tailscale app be van-e "
-                    + "jelentkezve, és hogy a hub fut-e.", false));
-        });
+            post(g, () -> status("A Tailscale fut, de a hub nem válaszol rajta (" + ts.substring(7) + ").\n\nNézd meg a "
+                    + "Tailscale appban, hogy a hub (zigbee-hub) a listában elérhető-e.", false, true));
+        }
     }
 
     @Override
     protected void onStart() {
         super.onStart();
         started = true;
+        ui.removeCallbacks(offTimer);
         OffReceiver.cancel(this);
+        web.onResume();
+        web.resumeTimers();
         probe();
         ConnectivityManager cm = getSystemService(ConnectivityManager.class);
         if (cm != null && netCb == null) {
@@ -311,7 +381,7 @@ public class MainActivity extends Activity {
 
     private void later() {
         ui.post(() -> {
-            if (started) {
+            if (started && !busy) {
                 ui.removeCallbacks(reprobe);
                 ui.postDelayed(reprobe, 2000);
             }
@@ -331,12 +401,20 @@ public class MainActivity extends Activity {
             }
             netCb = null;
         }
-        OffReceiver.schedule(this); /* 3 perc múlva Tailscale ki, ha az app kapcsolta be */
+        /* háttérben az oldal ne kérdezze tovább a hubot (akku, és így a Tailscale is pihenhet) */
+        web.onPause();
+        web.pauseTimers();
+        gen++; /* a futó próba se folytatódjon */
+        if (Hub.offIsOurs(this)) {
+            ui.postDelayed(offTimer, OffReceiver.DELAY_MS);
+            OffReceiver.schedule(this); /* tartalék */
+        }
     }
 
     @Override
     protected void onDestroy() {
         gen++;
+        ui.removeCallbacks(offTimer); /* a kikapcsolást innentől az OffReceiver ébresztője végzi */
         bg.shutdownNow();
         web.destroy();
         super.onDestroy();
@@ -374,10 +452,18 @@ public class MainActivity extends Activity {
                 : "\nTávoli elérés (Tailscale): " + ts.substring(7) + "\nAz app otthon magától frissíti.");
         t2.setTextColor(getColor(R.color.mut));
         l.addView(t2);
+        android.widget.CheckBox own = new android.widget.CheckBox(this);
+        own.setText("A Tailscale-t csak a hubhoz használom: az app kapcsolja ki otthon és 2 perccel a használat után "
+                + "(akkor is, ha kézzel kapcsoltam be)");
+        own.setChecked(Hub.ownTs(this));
+        LinearLayout.LayoutParams op = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        op.topMargin = dp(12);
+        l.addView(own, op);
         new AlertDialog.Builder(this)
                 .setTitle("A hub címe")
                 .setView(l)
                 .setPositiveButton("Mentés", (d, w) -> {
+                    Hub.setOwnTs(this, own.isChecked());
                     String u = Hub.normalize(in.getText().toString());
                     if (!u.isEmpty()) {
                         Hub.setLocal(this, u);

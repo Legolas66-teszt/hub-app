@@ -8,11 +8,12 @@ import android.content.Intent;
 import android.os.SystemClock;
 
 /**
- * Az app háttérbe kerülése után néhány perccel kikapcsolja a Tailscale-t – ha az app kapcsolta be.
+ * Az app háttérbe kerülése után 2 perccel kikapcsolja a Tailscale-t – ha az app kapcsolta be, vagy a beállítás szerint
+ * a Tailscale csak a hubhoz kell (alapból így).
  * Ha közben újra megnyitod, az időzítés törlődik (a VPN marad).
  */
 public class OffReceiver extends BroadcastReceiver {
-    static final long DELAY_MS = 3 * 60 * 1000L;
+    static final long DELAY_MS = 2 * 60 * 1000L;
 
     @Override
     public void onReceive(Context c, Intent i) {
@@ -25,7 +26,7 @@ public class OffReceiver extends BroadcastReceiver {
     }
 
     static void schedule(Context c) {
-        if (!Hub.weStarted(c)) {
+        if (!Hub.offIsOurs(c)) {
             return;
         }
         AlarmManager am = c.getSystemService(AlarmManager.class);
