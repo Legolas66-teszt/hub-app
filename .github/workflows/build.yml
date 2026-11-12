@@ -1,5 +1,6 @@
-# Minden feltöltés (push) után a GitHub lefordítja az appot, és a kész APK-t kiteszi a „Releases” alá
-# („latest” kiadás: hub-app.apk) – a telefonon onnan letölthető. Kézzel is indítható: Actions → APK → Run workflow.
+# Minden feltöltés (push) után a GitHub lefordítja mindkét appot, és a kész APK-kat kiteszi a „Releases” alá
+# („latest” kiadás: hub-app.apk – a Zigbee hubé, matter-app.apk – a Matter-egységé) – a telefonon onnan letölthetők.
+# Kézzel is indítható: Actions → APK → Run workflow.
 name: APK
 
 on:
@@ -26,19 +27,22 @@ jobs:
           gradle-version: '8.11.1'
 
       - name: Fordítás
-        run: gradle --no-daemon :app:assembleRelease
+        run: gradle --no-daemon :app:assembleZigbeeRelease :app:assembleMatterRelease
 
-      - name: Kiadás (Releases → latest → hub-app.apk)
+      - name: Kiadás (Releases → latest → hub-app.apk, matter-app.apk)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp app/build/outputs/apk/release/app-release.apk hub-app.apk
+          cp app/build/outputs/apk/zigbee/release/app-zigbee-release.apk hub-app.apk
+          cp app/build/outputs/apk/matter/release/app-matter-release.apk matter-app.apk
           gh release delete latest --yes --cleanup-tag || true
-          gh release create latest hub-app.apk \
+          gh release create latest hub-app.apk matter-app.apk \
             --title "Hub app – ${{ github.run_number }}. fordítás" \
-            --notes "A telefonon: koppints a hub-app.apk-ra, majd Telepítés (a régi fölé települ, a beállítások maradnak)."
+            --notes "A telefonon: hub-app.apk – a Zigbee hub, matter-app.apk – a Matter-egység. Koppints rá, majd Telepítés (a régi fölé települ, a beállítások maradnak)."
 
       - uses: actions/upload-artifact@v4
         with:
           name: hub-app
-          path: hub-app.apk
+          path: |
+            hub-app.apk
+            matter-app.apk

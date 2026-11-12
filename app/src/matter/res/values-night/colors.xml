@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- a Matter-app ikonja lila alapú (a Zigbee hubé kék) – hogy a telefonon ne keveredjen a kettő -->
+<resources>
+    <color name="icon_bg">#7C3AED</color>
+</resources>

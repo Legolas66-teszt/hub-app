@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- a Matter-egység appja: ezek felülírják a src/main/res értékeit (a kód és minden más közös) -->
+<resources>
+    <string name="app_name">Matter</string>
+    <string name="hub_host">matter-hub</string>
+</resources>

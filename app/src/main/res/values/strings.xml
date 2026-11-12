@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Hub</string>
+    <string name="app_name">Zigbee</string>
+    <!-- a hub neve a Tailscale-listában (hibaüzenetben); a Matter-változatban: src/matter/res/values/strings.xml -->
+    <string name="hub_host">zigbee-hub</string>
 </resources>

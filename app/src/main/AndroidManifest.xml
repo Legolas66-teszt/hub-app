@@ -4,9 +4,18 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
-    <!-- a Tailscale app: látni kell, hogy telepítve van-e, és kérést küldeni neki (be / ki) -->
+    <!-- A testvér-app (Zigbee hub ↔ Matter-egység) jelzései: "most én használom a Tailscale-t" – csak az azonos kulccsal
+         aláírt appok küldhetik (mindkét app ugyanezt az engedélyt hozza létre, ugyanazzal a kulccsal: ez megengedett) -->
+    <permission
+        android:name="hu.zigbeehub.permission.SIBLING"
+        android:protectionLevel="signature" />
+    <uses-permission android:name="hu.zigbeehub.permission.SIBLING" />
+
+    <!-- a Tailscale app: látni kell, hogy telepítve van-e, és kérést küldeni neki (be / ki); a testvér-app: jelezni neki -->
     <queries>
         <package android:name="com.tailscale.ipn" />
+        <package android:name="hu.zigbeehub.app" />
+        <package android:name="hu.zigbeehub.app.matter" />
     </queries>
 
     <application
@@ -33,5 +42,11 @@
         <receiver
             android:name=".OffReceiver"
             android:exported="false" />
+
+        <!-- a testvér-app jelzései (előtérbe került / háttérbe került) -->
+        <receiver
+            android:name=".SiblingReceiver"
+            android:exported="true"
+            android:permission="hu.zigbeehub.permission.SIBLING" />
     </application>
 </manifest>

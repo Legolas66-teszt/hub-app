@@ -34,6 +34,18 @@ final class Hub {
     private static final String K_ID = "id";         /* a hub azonosítója (Wi-Fi MAC) – más hálózat azonos IP-jű eszköze ellen */
     private static final String K_WE = "we_started"; /* a Tailscale-t ez az app kapcsolta be */
     private static final String K_OWN = "own_ts";    /* a Tailscale csak a hubhoz kell: az app akkor is kikapcsolja, ha kézzel kapcsolták be */
+    private static final String K_SIB = "sib_active";/* a testvér-app (Zigbee ↔ Matter) előtérben van – mikor jelezte (ms) */
+
+    /* A testvér-app: a Zigbee hub appja (hu.zigbeehub.app) és a Matter-egységé (hu.zigbeehub.app.matter) egymásnak jelez,
+     * hogy az egyik ne kapcsolja ki a Tailscale-t, amíg a másik használja. Mindkettő ugyanazt a Tailscale-t kapcsolja. */
+    static final String PERM_SIB = "hu.zigbeehub.permission.SIBLING";
+    static final String A_ACTIVE = "hu.zigbeehub.app.SIB_ACTIVE";
+    static final String A_INACTIVE = "hu.zigbeehub.app.SIB_INACTIVE";
+    private static final long SIB_MAX_MS = 6 * 3600 * 1000L; /* ha a testvér elfelejtené visszavonni (összeomlott) */
+    private static final String SUFFIX = ".matter";
+
+    /** Ez az app most előtérben van-e (a folyamat élete alatt; ha a folyamat nem él, nincs). */
+    static volatile boolean fg;
 
     static final class Ping {
         String id, ip, ts;
@@ -202,8 +214,39 @@ final class Hub {
         prefs(c).edit().putBoolean(K_WE, true).apply();
     }
 
-    /** Tailscale ki – csak ha ez az app kapcsolta be. */
+    // ------------------------------------------------------------------ a testvér-app
+
+    static String siblingPkg(Context c) {
+        String p = c.getPackageName();
+        return p.endsWith(SUFFIX) ? p.substring(0, p.length() - SUFFIX.length()) : p + SUFFIX;
+    }
+
+    /** Jelzés a testvér-appnak (ha telepítve van): előtérbe kerültem / háttérbe kerültem. */
+    static void tellSibling(Context c, boolean active) {
+        try {
+            Intent i = new Intent(active ? A_ACTIVE : A_INACTIVE);
+            i.setComponent(new ComponentName(siblingPkg(c), SiblingReceiver.class.getName()));
+            c.sendBroadcast(i, PERM_SIB);
+        } catch (Exception ignored) {
+            /* nincs telepítve – nem baj */
+        }
+    }
+
+    static void setSiblingActive(Context c, boolean active) {
+        prefs(c).edit().putLong(K_SIB, active ? System.currentTimeMillis() : 0L).apply();
+    }
+
+    /** A testvér-app most előtérben van (és így használhatja a Tailscale-t). */
+    static boolean siblingActive(Context c) {
+        long t = prefs(c).getLong(K_SIB, 0L);
+        return t > 0 && System.currentTimeMillis() - t < SIB_MAX_MS;
+    }
+
+    /** Tailscale ki – csak ha ez az app kapcsolta be (vagy csak a hubhoz kell), és a testvér-app épp nem használja. */
     static void tsOffIfOurs(Context c) {
+        if (siblingActive(c)) {
+            return; /* a testvér-app használja: ő kapcsolja ki, vagy a háttérbe kerülésekor szól, és akkor mi */
+        }
         if (offIsOurs(c)) {
             prefs(c).edit().putBoolean(K_WE, false).apply();
             if (vpnUp(c)) {

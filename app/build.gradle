@@ -26,6 +26,19 @@ android {
         }
     }
 
+    // Két app egy kódból: a Zigbee hubé (a régi azonosítóval – a meglévő app fölé települ) és a Matter-egységé
+    // (külön ikon, külön beállítások). A különbség csak a név, az ikon színe és a gépnév (src/matter/res).
+    flavorDimensions 'unit'
+    productFlavors {
+        zigbee {
+            dimension 'unit'
+        }
+        matter {
+            dimension 'unit'
+            applicationIdSuffix '.matter'
+        }
+    }
+
     buildTypes {
         release {
             minifyEnabled false

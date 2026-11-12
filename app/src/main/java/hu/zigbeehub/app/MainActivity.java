@@ -348,7 +348,7 @@ public class MainActivity extends Activity {
                 }
             }
             post(g, () -> status("A Tailscale fut, de a hub nem válaszol rajta (" + ts.substring(7) + ").\n\nNézd meg a "
-                    + "Tailscale appban, hogy a hub (zigbee-hub) a listában elérhető-e.", false, true));
+                    + "Tailscale appban, hogy a hub (" + getString(R.string.hub_host) + ") a listában elérhető-e.", false, true));
         }
     }
 
@@ -358,6 +358,8 @@ public class MainActivity extends Activity {
         started = true;
         ui.removeCallbacks(offTimer);
         OffReceiver.cancel(this);
+        Hub.fg = true;
+        Hub.tellSibling(this, true); /* a testvér-app (Zigbee ↔ Matter) ne kapcsolja ki alólunk a Tailscale-t */
         web.onResume();
         web.resumeTimers();
         probe();
@@ -393,6 +395,8 @@ public class MainActivity extends Activity {
         super.onStop();
         started = false;
         ui.removeCallbacks(reprobe);
+        Hub.fg = false;
+        Hub.tellSibling(this, false);
         ConnectivityManager cm = getSystemService(ConnectivityManager.class);
         if (cm != null && netCb != null) {
             try {
